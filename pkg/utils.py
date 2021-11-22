@@ -12,7 +12,7 @@ import os
 import time
 import random
 from skimage import transform
-
+from stl.transformer import Apply2DTform, Apply2DDispField
 #%% Custom tools
 def TicTocGenerator():
     # Generator that returns time differences
@@ -120,9 +120,11 @@ def _3Dtform_generation(batch=1, dim = (32,32,32), limit_t = [16,16,16],  limit_
     tform = tf.concat([tf.reshape(matrix, [batch, 9]), trans], axis=-1)
     
     return tform 
-
-def save_models(g, save_dir, epoch_number):            
-    g.save(os.path.join(save_dir, 'model_epoch_{}.h5'.format(epoch_number)), True)
+           
+def save_models(model, save_dir, epoch_number):            
+    tf.keras.models.save_model(model, os.path.join(save_dir, 'model_on_epoch_{}'.format(epoch_number)), overwrite=True, include_optimizer=False, save_format='tf')         
+    model.save(os.path.join(save_dir, 'model_on_epoch_{}.h5'.format(epoch_number)), overwrite=True, include_optimizer=True)  
+    
     
 def summary(model):
     stringlist = []
@@ -136,29 +138,41 @@ def schedule(epoch, decay, boundary, optimizer):
         tf.keras.backend.set_value(optimizer.learning_rate, g_lr*decay)           
     return tf.keras.backend.get_value(optimizer.learning_rate)
 
-def plot_2Dimages(model, Digits, Labels):
+def plot_2Dimages(model, Digits, Labels, method='tform'):
     nb, nh, nw, nc = Digits.shape
     
     Labels = np.argmax(Labels, axis=-1)
-    
-    Prediction, T0, tform = model(Digits, training=False)
-    Prediction = np.argmax(Prediction, axis=-1)
+    if method=='tform':
+        Prediction, T0, tform = model(Digits, training=False)
+        Prediction = np.argmax(Prediction, axis=-1)
+        Digit_tform = Apply2DTform((nh, nw, nc))(Digits, tform, padding=True, interp='Bilinear')
+        
+    elif method=='dispfield':
+        Prediction, T0, disp = model(Digits, training=False)
+        Prediction = np.argmax(Prediction, axis=-1)
+        Digit_tform = Apply2DDispField((nh, nw, nc))(Digits, disp, padding=True, interp='Bilinear')
+            
     # Convert the tensors to images.
     T0 = T0.numpy().squeeze(axis=-1)
     T0 = T0.astype(np.float32)
+    
     Digits = Digits.numpy().squeeze(axis=-1)
     Digits = Digits.astype(np.float32)
-
+    
+    Digit_tform = Digit_tform.numpy().squeeze(axis=-1)
+    Digit_tform = Digit_tform.astype(np.float32)
     # Plot images.
-    fig = plt.figure(figsize=(2 * 1.7, nb * 1.7))
-    images_list = [Digits, T0]
+    fig = plt.figure(figsize=(3 * 1.7, nb * 1.7))
+    images_list = [Digits, Digit_tform, T0]
     
     for i in range(nb):
-        for j in range(2):
-            ax = fig.add_subplot(nb, 2, i * 2 + j + 1)
+        for j in range(3):
+            ax = fig.add_subplot(nb, 3, i * 3 + j + 1)
             if j == 0:
                 ax.set_title('Label = {}'.format(Labels[i]), fontsize=20)
             if j == 1:
+                ax.set_title('Label = {}'.format(Labels[i]), fontsize=20)
+            if j == 2:
                 ax.set_title('Label = {}'.format(Prediction[i]), fontsize=20)
             ax.set_axis_off()
             ax.imshow(images_list[j][i], vmin=0, vmax=1, cmap='hot')
@@ -166,7 +180,7 @@ def plot_2Dimages(model, Digits, Labels):
     plt.tight_layout()
     plt.show()    
 
-def plot_3Dimages(model, Digits, Labels):
+def plot_3Dimages(model, Digits, Labels, method='tform'):
     nb, nh, nw, nd, nc = Digits.shape
     
     Labels = np.argmax(Labels, axis=-1)

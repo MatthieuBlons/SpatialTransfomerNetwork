@@ -189,7 +189,7 @@ class Apply2DTform(tf.keras.layers.Layer):
         # batch multiply tform sample grid
 
         # batchs_grids = tf.linalg.matmul(tf.linalg.inv(matrix), tf.add(sampling_grid, -vector))  # shape(B, 3, H*W)
-        batchs_grids = tf.linalg.matmul(matrix, tf.add(sampling_grid, vector))  # shape(B, 3, H*W)
+        batchs_grids = tf.add(tf.linalg.matmul(matrix, sampling_grid), vector) # shape(B, 3, H*W)
         # reshape to (B, 2, H, W)
         batchs_grids = tf.reshape(batchs_grids[:, :, :], [batchs, 2, height, width])
         # return T grid
@@ -216,12 +216,12 @@ class Apply2DTform(tf.keras.layers.Layer):
         H = tf.shape(Img)[1]
         W = tf.shape(Img)[2]
         # generate Id 
-        Id = tf.tile(tf.expand_dims(tf.eye(2), axis=0), [B,1,1])
+        # Id = tf.tile(tf.expand_dims(tf.eye(2), axis=0), [B,1,1])
         # Grab and Reshape Translation
         V = tf.reshape(Tform[:, 4:], [B, 2]) 
         V = tf.cast(V, 'float32')
         # Grab and Reshape Rot/Scale/Shear
-        M = tf.reshape(Tform[:, :4], [B, 2, 2]) + Id
+        M = tf.reshape(Tform[:, :4], [B, 2, 2]) 
         M = tf.cast(M, 'float32')
         # generate grids
         indx_grid = self._meshgrid(height = output_size[0], width = output_size[1], vector=V, matrix=M)
@@ -432,7 +432,7 @@ class Apply3DTform(tf.keras.layers.Layer):
         sampling_grid = tf.cast(sampling_grid, 'float32')
         # batch multiply tform sample grid
         # batchs_grids = tf.linalg.matmul(tf.linalg.inv(matrix), tf.add(sampling_grid, -vector)) # shape(B, 3, H*W*D)
-        batchs_grids = tf.linalg.matmul(matrix, tf.add(sampling_grid, vector)) # shape(B, 3, H*W*D)
+        batchs_grids = tf.add(tf.linalg.matmul(matrix, sampling_grid), vector) # shape(B, 3, H*W*D)
         # reshape to (B, 3, H, W, D)
         batchs_grids = tf.reshape(batchs_grids[:, :, :], [batchs, 3, height, width, depth])
         # return T grid
@@ -461,12 +461,12 @@ class Apply3DTform(tf.keras.layers.Layer):
         W = tf.shape(Img)[2]
         D = tf.shape(Img)[3]
         # generate Id 
-        Id = tf.tile(tf.expand_dims(tf.eye(3), axis=0), [B,1,1])
-        # Grab and Reshape Translation
+        # Id = tf.tile(tf.expand_dims(tf.eye(3), axis=0), [B,1,1])
+        # # Grab and Reshape Translation
         V = tf.reshape(Tform[:, 9:], [B, 3]) 
         V = tf.cast(V, 'float32')
         # Grab and Reshape Rot/Scale/Shear
-        M = tf.reshape(Tform[:, :9], [B, 3, 3]) + Id
+        M = tf.reshape(Tform[:, :9], [B, 3, 3])
         M = tf.cast(M, 'float32')   
         # generate grids
         indx_grid = self._meshgrid(height = output_size[0], width = output_size[1], depth = output_size[2], vector=V, matrix=M)

@@ -6,19 +6,16 @@ Created on Fri Nov 27 11:41:30 2020
 """
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # or any {'0', '1', '2'}
-import sys
-sys.path.append(r'E:\MB\Projets\Spatial_Transformer\MNIST_DigitRecog_SpatialTransformer')
-
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
 import time
 import random
 import datetime
-
+#%% import Custom tools
 from pkg.utils import tic, toc, _2Dtform_generation, save_models, load_data, plot_2Dimages, schedule, summary
-from pkg.nn import create_FCN_2D, Data2DGenerator
-from stl.transformer import Apply2DTform
+from pkg.nn import create_FCN_2D, create_CNN_2D, create_CNNDISP_2D, Data2DGenerator
+from stl.transformer import Apply2DTform, Apply2DDispField
 #%% GPU config
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
@@ -28,14 +25,14 @@ if gpus:
         tf.config.experimental.set_memory_growth(gpu, True) # allow memory growth
     tf.config.set_logical_device_configuration(
         gpus[0],
-        [tf.config.LogicalDeviceConfiguration(memory_limit=5000)]) # start with 1000 Mo
+        [tf.config.LogicalDeviceConfiguration(memory_limit=3000)]) # start with 1000 Mo
   except RuntimeError as e:
     print(e)
 #%%
 # TODO -> understand how the decorator @tf.function works
 @tf.function          
 def CategoricalCrossentropy(y_true, y_pred):
-    loss = tf.keras.backend.mean(tf.keras.losses.CategoricalCrossentropy(name='categorical_crossentropy')(y_true, y_pred))
+    loss = tf.keras.losses.CategoricalCrossentropy(name='categorical_crossentropy')(y_true, y_pred)
     return loss
 
 @tf.function
@@ -53,7 +50,7 @@ def train_step(model, Imgs, Labels, criterion, optimizer, metric):
     gradients_of_registrator = reg_tape.gradient(loss, model.trainable_variables)
     # Update the weights of the critic using the critic optimizer (Back propagation)
     optimizer.apply_gradients(zip(gradients_of_registrator, model.trainable_variables))    
-    return [loss, acc]
+    return [tf.reduce_mean(loss), acc]
 
 @tf.function
 def test_step(model, Imgs, Labels, criterion, metric):        
@@ -64,7 +61,7 @@ def test_step(model, Imgs, Labels, criterion, metric):
     # Calculate accuracy 
     metric.update_state(Labels, prediction)
     acc = metric.result()
-    return [loss, acc]
+    return [tf.reduce_mean(loss), acc]
 #%%
 def main(args):
     print('PREP...')
@@ -121,7 +118,7 @@ def main(args):
             partition['valid'].append(i+1)
         
     # Create a model instance.
-    model = create_FCN_2D(img_shape=(*args.input_dim, 1))
+    model = create_FCN_2D(img_shape=(*args.input_dim, 1)) #create_CNN_2D or create_FCN_2D
     if args.display_summary:
         model.summary()
         
@@ -131,15 +128,13 @@ def main(args):
     metric = tf.keras.metrics.CategoricalAccuracy()
     
     # Train and evaluate the model.
-    plot_2Dimages(model, x_sample, y_sample)
-    
     print('Training START')
     now = datetime.datetime.now()
     for epoch in range(args.epochs):  
         start = time.time()
         if args.plot_result:
             if int(epoch+1) % int(args.freq) == 0:
-                plot_2Dimages(model, x_sample, y_sample)
+                plot_2Dimages(model, x_sample, y_sample,method='tform')
         
         if args.use_schedule:
             boundary = np.int(np.ceil(args.epochs - args.epochs*args.boundary))
@@ -203,7 +198,7 @@ def main(args):
     
     # Show sample results.
     if args.plot_result:
-        plot_2Dimages(model, x_sample, y_sample)
+        plot_2Dimages(model, x_sample, y_sample, 'tform')
         
     # Save the trained model.
     if args.save_model:
@@ -280,12 +275,12 @@ if __name__ == '__main__':
 
     class Args():
         init_dim = (28, 28)
-        input_dim = (42,42)
+        input_dim = (64,64)
         N_train = 60000
         N_test = 1000
         batch_size = 256
-        epochs = 10 # 20000 Img/ batch size 256/150k iterations -> 1920 epochs
-        optimizer = tf.keras.optimizers.Adam
+        epochs = 600 # Img/ batch size 256/150k iterations -> 640 epochs
+        optimizer = tf.keras.optimizers.SGD
         lr = 0.01
         num_samples = 7
         save_model = False  
@@ -298,7 +293,7 @@ if __name__ == '__main__':
         use_tform = True
         display_summary=True
         plot_result=True
-        freq = 10
+        freq = 30
         ModelDir = r'E:\MB\Projets\Spatial_Transformer\MNIST_DigitRecog_SpatialTransformer\Trained_Models\MNIST\2D_Digits_Recog'
         
         
@@ -326,8 +321,8 @@ ax[1].set_ylabel('acc')
 ax[1].set_xlabel('epoch')
 ax[1].set_title('Acc')
 #%% Results 
-nb = 1
-tform  = _2Dtform_generation(batch=nb, dim=(42, 42), 
+nb = 5
+tform  = _2Dtform_generation(batch=nb, dim=(64, 64), 
                            limit_tx=12, limit_ty=12, limit_r=45, limit_scale=0.3,  limit_shear=0)
 
 Id = tf.cast(tf.expand_dims([1,0,0,1,0,0], axis=0), dtype='float32')
@@ -339,11 +334,16 @@ x_sample = x_train[ids, :, :]
 y_sample = y_train[ids,]
 
 tic()
-x_sample = Apply2DTform((42,42,1))(x_sample, tform, padding=True, interp='Bilinear')
+x_sample = Apply2DTform((64,64,1))(x_sample, tform, padding=True, interp='Bilinear')
 toc()
 
 Prediction, T0, tform = model(x_sample, training=False)
-print('tform={}'.format(tform))
-fig, ax = plt.subplots(ncols=2)
-ax[0].imshow(np.squeeze(x_sample.numpy()), cmap='hot', vmin=0, vmax=1)
-ax[1].imshow(np.squeeze(T0.numpy()), cmap='hot', vmin=0, vmax=1)
+#print('tform={}'.format(tform))
+x_sample_tform = Apply2DTform((64,64,1))(x_sample, tform, padding=True, interp='Bilinear')
+
+plot_2Dimages(model, x_sample, y_sample, method='tform')
+
+fig, ax = plt.subplots(ncols=3)
+ax[0].imshow(np.squeeze(x_sample[0].numpy()), cmap='hot', vmin=0, vmax=1)
+ax[1].imshow(np.squeeze(x_sample_tform[0].numpy()), cmap='hot', vmin=0, vmax=1)
+ax[2].imshow(np.squeeze(T0[0].numpy()), cmap='hot', vmin=0, vmax=1)

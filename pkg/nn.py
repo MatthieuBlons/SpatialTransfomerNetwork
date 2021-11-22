@@ -7,7 +7,7 @@ Created on Tue Sep 21 15:51:36 2021
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
-from stl.transformer import Apply2DTform, Apply3DTform
+from stl.transformer import Apply2DTform, Apply3DTform, Apply2DDispField
 from pkg.utils import _3Dtform_generation, _2Dtform_generation
 #%% Custom Block
 def Conv_Block2D(c, 
@@ -59,85 +59,44 @@ def Conv_Block3D(c,
     if use_dropout:
         c = layers.Dropout(drop_value, name='{}_Dropout'.format(name))(c)   
     return c
-#%% Create Model
-def create_FCN_3D(img_shape):
-    kernel_init = tf.keras.initializers.RandomUniform(minval=-0.01, maxval=0.01, seed=None)
-    
-    inputs = layers.Input(img_shape)          
-    
-    # Spatial Transformer 
-    f0 = layers.Flatten()(inputs)
-    f1 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(1))(f0)
-    f2 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(2))(f1)
-    f3 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(3))(f2)
-    tform = layers.Dense(12, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([0,0,0,0,0,0,0,0,0,0,0,0]), name='Output_Tform')(f3)
-    
-    t0 = Apply3DTform(inputs.shape[1:])(inputs, tform, padding=False, interp='Trilinear') 
-    p0 = tf.math.reduce_mean(t0, axis=3)
-    p0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2))(p0)
-    
-    # Fully Connected Classifier
-    f = layers.Flatten()(p0)    
-    f = layers.Dense(128, activation=tf.nn.relu)(f) 
-    f = layers.Dense(128, activation=tf.nn.relu)(f)
-    label = layers.Dense(10, activation=tf.nn.softmax)(f)
-             
-    # define model
-    model = tf.keras.models.Model(inputs, 
-                                  [label, p0, tform], 
-                                  name='Classifier')       
-    return model
-
-def create_CNN_3D(img_shape):
-    kernel_init = tf.keras.initializers.RandomUniform(minval=-0.01, maxval=0.01, seed=None)
-    
-    inputs = layers.Input(img_shape)          
-    
-    # Spatial Transformer 
-    c0 = Conv_Block3D(inputs, filters=64, name='ST_1', kernel_size=(5, 5, 5), kernel_init=kernel_init, strides=(1, 1, 1), padding="valid", use_relu=True)
-    c0 = layers.MaxPooling3D(pool_size=(2,2,2), strides=(2,2,2), name='ST_1_MaxPool')(c0)
-    c0 = Conv_Block3D(c0, filters=64, name='ST_2', kernel_size=(5, 5, 5), kernel_init=kernel_init, strides=(1, 1, 1), padding="valid", use_relu=True)
-    c0 = layers.MaxPooling3D(pool_size=(2,2,2), strides=(2,2,2), name='ST_2_MaxPool')(c0)
-    c0 = layers.Flatten()(c0)
-    c0 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense')(c0)
-    tform = layers.Dense(12, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([0,0,0,0,0,0,0,0,0,0,0,0]), name='Output_Tform')(c0)
-
-    t0 = Apply3DTform(inputs.shape[1:])(inputs, tform, padding=False, interp='Trilinear') 
-    p0 = tf.math.reduce_max(t0, axis=3)
-    p0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2))(p0)
-    
-    # Classifier
-    c = Conv_Block2D(p0, filters=32, name='Classifier_1', kernel_size=(9, 9), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
-    c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_1_MaxPool')(c)
-    c = Conv_Block2D(c, filters=32, name='Classifier_2', kernel_size=(7, 7), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
-    c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_2_MaxPool')(c)
-    c = layers.Flatten()(c)
-    label = layers.Dense(10, activation=tf.nn.softmax, name='Output_Label')(c) 
-    
-    # define model
-    model = tf.keras.models.Model(inputs, 
-                                  [label, t0, tform], 
-                                  name='ST_CNN')  
-    
-    return model
 #%% Create fully connected Model
+
+# FixTensorValue
+class Fix2Id(tf.keras.constraints.Constraint):
+  """Constrains weight tensors to be centered around `ref_value`."""
+  def __init__(self, fix_value):
+    self.fix_value = fix_value
+    
+  def __call__(self,tensor):
+    # check size of input tensor 
+    return self.fix_value
+
+  def get_config(self):
+    return {'fix_value': self.fix_value}
+
 def create_FCN_2D(img_shape):
     # kernel initialization
-    kernel_init = tf.keras.initializers.RandomUniform(minval=-0.01, maxval=0.01, seed=None)
+    kernel_init = tf.keras.initializers.GlorotUniform()
+    # Constraints
+    bias_constraint = Fix2Id([1,0,0,1,0,0])
     # input layer
     inputs = layers.Input(img_shape)          
     # Spatial Transformer 
     f0 = layers.Flatten()(inputs)
     f1 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(1))(f0)
+    f1 = layers.BatchNormalization()(f1)
     f2 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(2))(f1)
+    f2 = layers.BatchNormalization()(f2)
     f3 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(3))(f2)
-    tform = layers.Dense(6, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([0,0,0,0,0,0]), name='Output_Tform')(f3)
+    f3 = layers.BatchNormalization()(f3)
+    tform = layers.Dense(6, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([1,0,0,1,0,0]), bias_constraint=bias_constraint, name='Output_Tform')(f3)
+    tform = tf.clip_by_value(tform, clip_value_min=-2, clip_value_max=2, name='Gradient Clipping')
     # Apply tform
     t0 = Apply2DTform(inputs.shape[1:])(inputs, tform, padding=False, interp='Bilinear') 
     t0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2))(t0)
     # Classifier
     f = layers.Flatten()(t0)    
-    f = layers.Dense(256, activation=tf.nn.relu, kernel_initializer=kernel_init)(f)
+    f = layers.Dense(128, activation=tf.nn.relu, kernel_initializer=kernel_init)(f)
     f = layers.Dense(128, activation=tf.nn.relu, kernel_initializer=kernel_init)(f)
     label = layers.Dense(10, activation=tf.nn.softmax)(f) 
     # define model
@@ -149,7 +108,9 @@ def create_FCN_2D(img_shape):
 #%% Create convolutional Model
 def create_CNN_2D(img_shape):
     # kernel initialization
-    kernel_init = tf.keras.initializers.RandomUniform(minval=-0.01, maxval=0.01, seed=None)
+    kernel_init = tf.keras.initializers.RandomNormal(stddev=0.01)
+    # Constraints
+    bias_constraint = Fix2Id([1,0,0,1,0,0])
     # input layer
     inputs = layers.Input(img_shape)          
     # Spatial Transformer 
@@ -159,12 +120,13 @@ def create_CNN_2D(img_shape):
     c0 = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='ST_2_MaxPool')(c0)
     c0 = layers.Flatten()(c0)
     c0 = layers.Dense(20, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense')(c0)
-    tform = layers.Dense(6, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([0,0,0,0,0,0]), name='Output_Tform')(c0)
+    tform = layers.Dense(6, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([1,0,0,1,0,0]), bias_constraint=bias_constraint, name='Output_Tform')(c0)
+    tform = tf.clip_by_value(tform, clip_value_min=-2, clip_value_max=2, name='Gradient Clipping')
     # Apply tform
     t0 = Apply2DTform(inputs.shape[1:])(inputs, tform, padding=False, interp='Bilinear') 
     t0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2), name='ST_AveragePool')(t0)
     # Classifier
-    c = Conv_Block2D(t0, filters=64, name='Classifier_1', kernel_size=(9, 9), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
+    c = Conv_Block2D(t0, filters=32, name='Classifier_1', kernel_size=(9, 9), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
     c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_1_MaxPool')(c)
     c = Conv_Block2D(t0, filters=32, name='Classifier_2', kernel_size=(7, 7), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
     c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_2_MaxPool')(c)
@@ -173,6 +135,38 @@ def create_CNN_2D(img_shape):
     # define model
     model = tf.keras.models.Model(inputs, 
                                   [label, t0, tform], 
+                                  name='ST_CNN')  
+    
+    return model
+#%% Create convolutional Model
+def create_CNNDISP_2D(img_shape):
+    # kernel initialization
+    kernel_init = tf.keras.initializers.RandomNormal(stddev=0.01)
+    # input layer
+    inputs = layers.Input(img_shape)          
+    # Spatial Transformer 
+    c0 = Conv_Block2D(inputs, filters=20, name='ST_1_Conv', kernel_size=(5, 5), kernel_init=kernel_init, strides=(1, 1), padding="same", use_relu=True)
+    c0 = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='ST_1_MaxPool')(c0)
+    c0 = Conv_Block2D(c0, filters=20, name='ST_2_Conv', kernel_size=(5, 5), kernel_init=kernel_init, strides=(1, 1), padding="same", use_relu=True)
+    c0 = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='ST_2_MaxPool')(c0)
+    b0 = Conv_Block2D(c0, filters=20, name='ST_3_Conv', kernel_size=(5, 5), kernel_init=kernel_init, strides=(1, 1), padding="same", use_relu=True)   
+    u0 = layers.Conv2DTranspose(20, kernel_size = (5, 5), strides = (2,2), padding = 'same', name='ST_1_StrConv')(b0)
+    u0 = layers.Conv2DTranspose(20, kernel_size = (5, 5), strides = (2,2), padding = 'same', name='ST_2_StrConv')(u0)    
+    DispField = layers.Conv2D(filters=2,  kernel_size=(5, 5), strides=(1, 1), kernel_initializer=tf.keras.initializers.zeros(), bias_initializer=tf.keras.initializers.zeros(), padding="same", name ='DispField')(u0)  
+    DispField = tf.clip_by_value(DispField, clip_value_min=-1, clip_value_max=1, name='Gradient Clipping')
+    # Apply tform
+    t0 = Apply2DDispField(inputs.shape[1:])(inputs, DispField, padding=False, interp='Bilinear') 
+    t0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2), name='ST_AveragePool')(t0)
+    # Classifier
+    c = Conv_Block2D(t0, filters=32, name='Classifier_1', kernel_size=(9, 9), kernel_init=kernel_init, strides=(1, 1), padding="same", use_relu=True)
+    c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_1_MaxPool')(c)
+    c = Conv_Block2D(t0, filters=32, name='Classifier_2', kernel_size=(7, 7), kernel_init=kernel_init, strides=(1, 1), padding="same", use_relu=True)
+    c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_2_MaxPool')(c)
+    c = layers.Flatten()(c)
+    label = layers.Dense(10, activation=tf.nn.softmax, name='Output_Label')(c) 
+    # define model
+    model = tf.keras.models.Model(inputs, 
+                                  [label, t0, DispField], 
                                   name='ST_CNN')  
     
     return model
@@ -245,6 +239,66 @@ class Data2DGenerator(tf.keras.utils.Sequence):
             
         return [Imgs, Labels]  
     
+#%% Create Model
+def create_FCN_3D(img_shape):
+    kernel_init = tf.keras.initializers.GlorotUniform()
+    
+    inputs = layers.Input(img_shape)          
+    
+    # Spatial Transformer 
+    f0 = layers.Flatten()(inputs)
+    f1 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(1))(f0)
+    f2 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(2))(f1)
+    f3 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense_{}'.format(3))(f2)
+    tform = layers.Dense(12, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([1,0,0,0,1,0,0,0,1,0,0,0]), name='Output_Tform')(f3)
+    
+    t0 = Apply3DTform(inputs.shape[1:])(inputs, tform, padding=False, interp='Trilinear') 
+    p0 = tf.math.reduce_mean(t0, axis=3)
+    p0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2))(p0)
+    
+    # Fully Connected Classifier
+    f = layers.Flatten()(p0)    
+    f = layers.Dense(128, activation=tf.nn.relu)(f) 
+    f = layers.Dense(128, activation=tf.nn.relu)(f)
+    label = layers.Dense(10, activation=tf.nn.softmax)(f)
+             
+    # define model
+    model = tf.keras.models.Model(inputs, 
+                                  [label, p0, tform], 
+                                  name='Classifier')       
+    return model
+#%%
+def create_CNN_3D(img_shape):
+    kernel_init = tf.keras.initializers.RandomNormal(stddev=0.01)
+    inputs = layers.Input(img_shape)          
+    
+    # Spatial Transformer 
+    c0 = Conv_Block3D(inputs, filters=64, name='ST_1', kernel_size=(5, 5, 5), kernel_init=kernel_init, strides=(1, 1, 1), padding="valid", use_relu=True)
+    c0 = layers.MaxPooling3D(pool_size=(2,2,2), strides=(2,2,2), name='ST_1_MaxPool')(c0)
+    c0 = Conv_Block3D(c0, filters=64, name='ST_2', kernel_size=(5, 5, 5), kernel_init=kernel_init, strides=(1, 1, 1), padding="valid", use_relu=True)
+    c0 = layers.MaxPooling3D(pool_size=(2,2,2), strides=(2,2,2), name='ST_2_MaxPool')(c0)
+    c0 = layers.Flatten()(c0)
+    c0 = layers.Dense(32, activation=tf.nn.relu, kernel_initializer=kernel_init, name='ST_Dense')(c0)
+    tform = layers.Dense(12, activation='linear', kernel_initializer='zeros', bias_initializer=tf.constant_initializer([1,0,0,0,1,0,0,0,1,0,0,0]), name='Output_Tform')(c0)
+
+    t0 = Apply3DTform(inputs.shape[1:])(inputs, tform, padding=False, interp='Trilinear') 
+    p0 = tf.math.reduce_max(t0, axis=3)
+    p0 = layers.AveragePooling2D(pool_size=(2,2), strides=(2,2))(p0)
+    
+    # Classifier
+    c = Conv_Block2D(p0, filters=32, name='Classifier_1', kernel_size=(9, 9), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
+    c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_1_MaxPool')(c)
+    c = Conv_Block2D(c, filters=32, name='Classifier_2', kernel_size=(7, 7), kernel_init=kernel_init, strides=(1, 1), padding="valid", use_relu=True)
+    c = layers.MaxPooling2D(pool_size=(2,2), strides=(2,2), name='Classifier_2_MaxPool')(c)
+    c = layers.Flatten()(c)
+    label = layers.Dense(10, activation=tf.nn.softmax, name='Output_Label')(c) 
+    
+    # define model
+    model = tf.keras.models.Model(inputs, 
+                                  [label, t0, tform], 
+                                  name='ST_CNN')  
+    
+    return model
 #%% 3D Data generator class
 class Data3DGenerator(tf.keras.utils.Sequence):
     'Generates data for Keras'
