@@ -187,7 +187,6 @@ class Apply2DTform(tf.keras.layers.Layer):
         # Grid
         sampling_grid = tf.cast(sampling_grid, 'float32')
         # batch multiply tform sample grid
-
         # batchs_grids = tf.linalg.matmul(tf.linalg.inv(matrix), tf.add(sampling_grid, -vector))  # shape(B, 3, H*W)
         batchs_grids = tf.add(tf.linalg.matmul(matrix, sampling_grid), vector) # shape(B, 3, H*W)
         # reshape to (B, 2, H, W)
